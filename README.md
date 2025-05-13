@@ -1,0 +1,1 @@
+# Azure-db-redundancy-inventory
