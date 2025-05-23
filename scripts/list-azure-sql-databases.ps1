@@ -3,7 +3,7 @@
 $outputFile = "sql_databases.csv"
 
 # Write CSV header
-"ResourceGroup,ServerOrInstance,DatabaseName,Size,Status,RedundancyType,Type" | Out-File -FilePath $outputFile -Encoding utf8
+"ResourceGroup,ServerOrInstance,DatabaseName,Size,Status,RedundancyType,Type,StorageSizeGB" | Out-File -FilePath $outputFile -Encoding utf8
 
 # --- SQL Databases (PaaS) ---
 $databases = az resource list --resource-type "Microsoft.Sql/servers/databases" --query "[].{Id:id, ResourceGroup:resourceGroup}" --output json | ConvertFrom-Json
@@ -22,9 +22,10 @@ Write-Host "Fetching SQL DBs for Resource Group: $resourceGroup, Server: $server
 
 $dbs = az sql db list --resource-group $resourceGroup --server $server --query "[].{Name:name, Size:currentServiceObjectiveName, Status:status}" --output json | ConvertFrom-Json
 
-foreach ($db in $dbs) {
-    # Get detailed info for each database, focusing directly on properties we need
+foreach ($db in $dbs) {    # Get detailed info for each database, focusing directly on properties we need
     $dbDetails = az sql db show --name $($db.Name) --resource-group $resourceGroup --server $server --output json | ConvertFrom-Json
+      # Extract storage size in GB (convert bytes to GB)
+    $storageSizeGB = [math]::Round($dbDetails.maxSizeBytes / 1073741824, 2) # 1073741824 = 1GB in bytes
     
     # Determine redundancy type based on the available properties
     $redundancyType = "None"
@@ -77,7 +78,7 @@ foreach ($db in $dbs) {
         $redundancyType = "Local Redundancy (Premium/Business Critical)"
     }
 
-    "$resourceGroup,$server,$($db.Name),$($db.Size),$($db.Status),$redundancyType,SQLDatabase" | Out-File -FilePath $outputFile -Append -Encoding utf8
+    "$resourceGroup,$server,$($db.Name),$($db.Size),$($db.Status),$redundancyType,SQLDatabase,$storageSizeGB" | Out-File -FilePath $outputFile -Append -Encoding utf8
 }
 }
 
@@ -92,6 +93,9 @@ Write-Host "Fetching Managed DBs for Resource Group: $resourceGroup, Instance: $
 
 # Get detailed instance info
 $miDetails = az sql mi show --name $miName --resource-group $resourceGroup --output json | ConvertFrom-Json
+
+# Extract storage size in GB (already in GB units)
+$storageSizeGB = [math]::Round($miDetails.storageSizeInGB, 2)
 
 # Determine redundancy type for managed instance
 $redundancyType = "None"
@@ -164,7 +168,16 @@ try {
 $managedDbs = az sql midb list --managed-instance $miName --resource-group $resourceGroup --query "[].{Name:name, Status:status}" --output json | ConvertFrom-Json
 
 foreach ($db in $managedDbs) {
-    "$resourceGroup,$miName,$($db.Name),N/A,$($db.Status),$redundancyType,ManagedInstance" | Out-File -FilePath $outputFile -Append -Encoding utf8
+    # Get individual managed DB details to check if there's any specific storage size (fallback to instance size if not available)
+    $dbDetails = az sql midb show --name $($db.Name) --managed-instance $miName --resource-group $resourceGroup --output json | ConvertFrom-Json
+    
+    # Use DB-specific storage size if available, otherwise use the instance level storage size
+    $dbStorageSizeGB = $storageSizeGB
+    if ($dbDetails.PSObject.Properties['maxSizeBytes']) {
+        $dbStorageSizeGB = [math]::Round($dbDetails.maxSizeBytes / 1073741824, 2) # 1073741824 = 1GB in bytes
+    }
+    
+    "$resourceGroup,$miName,$($db.Name),N/A,$($db.Status),$redundancyType,ManagedInstance,$dbStorageSizeGB" | Out-File -FilePath $outputFile -Append -Encoding utf8
 }
 }
 
